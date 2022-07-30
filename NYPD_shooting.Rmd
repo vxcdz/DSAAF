@@ -1,0 +1,156 @@
+---
+title: "NYPD Shooting Incident Data Analysis"
+date: '2022-07-28'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r load_libraries, echo=TRUE, message=FALSE}
+library(tidyverse)
+library(lubridate)
+```
+
+# Data Import
+```{r load_data, echo=TRUE}
+# Import from URL
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+NYPD_shooting <- read_csv(url_in)
+
+# Import local file
+#NYPD_shooting <- read.csv(file = 'NYPD_Shooting_Incident_Data__Historic_.csv')
+```
+
+# Description
+
+A analysis of shootings in New York City provided by the New York Police Department.  The data is imported from the cityofnewyork.us website in CSV format.
+
+The analysis answers the following questions:
+
+* In what part of the year do the majority of shootings occur for 2021?
+* In which boroughs do the majority of the shootings occur for 2021?
+* In which descriptive location do the majority shootings occur?
+  
+# Data Cleaning
+
+* `NYPD_shooting` - Raw data set in CSV format
+* `NYPD_shooting_date` - A subset of NYPD_shooting that groups total shootings per day, per borough.
+* `NYPD_shooting_location` - A subset of NYPD_shooting that groups total shootings per location description.  Empty values in this data are filtered out with filter().
+* `NYPD_shooting_precinct_2020_2021` - A subset of NYPD_shooting that includes totals per borough for 2020 and 2021
+
+
+```{r data_cleaning,echo=TRUE, message=FALSE}
+# Shootings per borough
+NYPD_shooting_date <- NYPD_shooting %>%
+    select(BORO, OCCUR_DATE) %>%
+    group_by(BORO, OCCUR_DATE) %>%
+    summarize(count=n()) %>%
+    mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+    ungroup()
+
+# Shootings per location
+NYPD_shooting_location <- NYPD_shooting %>%
+    select(LOCATION_DESC) %>%
+    filter(LOCATION_DESC != "NA" & LOCATION_DESC != "NONE" & LOCATION_DESC != "") %>%
+    group_by(LOCATION_DESC) %>%
+    summarize(count=n()) %>%
+    slice_max(count, n = 10) %>%
+    ungroup()
+
+# 2020 Shootings per precinct
+NYPD_shooting_precinct_2020 <- NYPD_shooting %>%
+    mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+    select(PRECINCT, OCCUR_DATE) %>%
+    filter(OCCUR_DATE > "2020-01-01" & OCCUR_DATE < "2020-12-31") %>%
+    group_by(PRECINCT) %>%
+    summarize(count=n()) %>%
+    ungroup()
+
+# 2021 Shootings per precinct
+NYPD_shooting_precinct_2021 <- NYPD_shooting %>%
+    mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+    select(PRECINCT, OCCUR_DATE) %>%
+    filter(OCCUR_DATE > "2021-01-01" & OCCUR_DATE < "2021-12-31") %>%
+    group_by(PRECINCT) %>%
+    summarize(count=n()) %>%
+    ungroup()
+
+# Rename columns
+NYPD_shooting_precinct_2020 <- NYPD_shooting_precinct_2020 %>%
+    rename("count_2020" = "count")
+NYPD_shooting_precinct_2021 <- NYPD_shooting_precinct_2021 %>%    
+    rename("count_2021" = "count")
+
+# Join precinct data for 2020 and 2021 into one table
+NYPD_shooting_precinct_2020_2021 <- NYPD_shooting_precinct_2020 %>%
+    full_join(NYPD_shooting_precinct_2021)
+
+# Set any NA values to 0
+NYPD_shooting_precinct_2020_2021 <- mutate_all(NYPD_shooting_precinct_2020_2021, ~replace_na(.,0))
+```
+
+# Data Summary
+```{r date_summary, echo=TRUE, message=FALSE}
+summary(NYPD_shooting_date)
+summary(NYPD_shooting_location)
+summary(NYPD_shooting_precinct_2020_2021)
+```
+
+# Shootings Per Borough
+```{r shooting_date, echo=TRUE}
+NYPD_shooting_date %>%
+    filter(BORO %in% c("MANHATTAN", "BRONX", "BROOKLYN", "QUEENS", "STATEN ISLAND") 
+           & OCCUR_DATE > "2021-01-01" & OCCUR_DATE < "2021-12-31") %>%
+    ggplot(aes(x = OCCUR_DATE, y = count, group=BORO, color=BORO)) +
+    geom_line() +
+    theme(legend.position="bottom", axis.text.x = element_text(angle = 90)) +
+    scale_x_date(breaks = scales::breaks_pretty(10)) +
+    xlab("Date of Occurrence") +
+    ylab("Shootings") +
+    labs(title = "2021 Shootings Per Borough", y= NULL)
+```
+
+The total number of shootings per day, per borough for 2021.  Shootings appear to subside during the winter months which may indicate that weather may have an impact on the crime.  Human behavior suggests that people typically avoid going out in the cold New York winters no matter what the activity.  The analysis implies that shootings tend to happen during the spring, summer, and fall seasons when the climate is more comfortable.  Analyzing previous years could confirm whether this trend continues.  The chart also indicates that most shootings occur in the Bronx and Brooklyn boroughs.  The Staten Island borough presented the least number of shootings.  
+
+# Shootings Per Location
+```{r shooting_location, echo=TRUE}
+NYPD_shooting_location %>%
+    ggplot(aes(x = reorder(LOCATION_DESC, -count), y = count, fill=LOCATION_DESC)) +
+    geom_bar(stat = "identity") +
+    guides(fill="none") +
+    theme(legend.position="bottom", axis.text.x = element_text(angle = 90)) +
+    xlab("Location") +
+    labs(title = "Most Common Shooting Locations", y= NULL)
+```
+
+The number of shootings per location description.  The majority of  shootings occur at home or in an apartment location.  Shootings may happen more in the home setting as to not be in a public location with potential witnesses.
+
+# Shootings Per Precinct (2020 vs 2021)
+```{r precinct_2020_2021, echo=TRUE}
+mod <- lm(count_2020 ~ count_2021, data = NYPD_shooting_precinct_2020_2021)
+precinct_w_pred <- NYPD_shooting_precinct_2020_2021 %>% mutate(pred = predict(mod))
+
+precinct_w_pred %>% ggplot() +
+geom_point(aes(x = count_2021, y = count_2020), color = "blue") +
+geom_point(aes(x = count_2021, y = pred), color = "red") +
+xlab("2021 Shootings Per Precinct") +
+ylab("2020 Shootings Per Precinct")
+```
+
+A linear model of the shootings per precinct for 2021 compared to 2020.
+
+# Conclusion
+
+Given the analysis results, shootings tend to subside during the potential harsh winter months of New York City.  The majority of shootings occur in or near the home or an apartment setting possibly to avoid witnesses in a public setting.  Finally, for 2021 the majority of shootings occur in the Bronx and Brooklyn boroughs.  The Staten Island borough presented the least number of shootings for 2021.
+
+# Bias
+
+There may be data bias in the data provided by the NYPD unless each shooting and the details of the shooting can be substantiated.  There may also be outlier bias in the model that skews the results in one direction.  There is no personal bias in this analysis as the data is generalized and not specific to any human trait.
+
+```{r sessioninfo, echo=TRUE}
+sessionInfo()
+```
