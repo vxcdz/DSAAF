@@ -1,0 +1,169 @@
+---
+title: "Maryland COVID-19 Analysis"
+output:
+  html_document: default
+  pdf_document: default
+date: '2022-07-24'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries, echo=TRUE, message=FALSE}
+library(tidyverse)
+library(lubridate)
+```
+
+# Data Import
+
+```{r data_import, echo=TRUE, message=FALSE}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+file_names <- c("time_series_covid19_confirmed_US.csv", "time_series_covid19_deaths_US.csv")
+
+urls <- str_c(url_in,file_names)
+
+US_cases <- read_csv(urls[1])
+US_deaths <- read_csv(urls[2])
+
+# Import local file
+#US_cases <- read.csv(file = 'time_series_covid19_confirmed_US.csv')
+#US_deaths <- read.csv(file = 'time_series_covid19_deaths_US.csv')
+```
+
+# Description
+
+This is an analysis of John Hopkins COVID-19 time series data as it relates to the state of Maryland.  The data is imported from the following GitHub repository in CSV format:
+
+https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series
+
+The analysis answers the following questions:
+
+* Which Maryland counties have the most cases over time?
+* Which Maryland counties have the most deaths?
+* What is the correlation of county population size to total number of cases?
+  
+# Data Processing
+
+* `US_cases` - US cases per county in each state for each day starting with January 22nd, 2020.
+* `US_deaths` - US deaths per county in each state for each day starting with January 22nd, 2020.
+* `US_cases_deaths` - US_cases and US_deaths joined.
+* `US_MD` - Cases and deaths per day selected from the state of Maryland.
+* `US_MD_deaths` - Total deaths per Maryland county.
+* `US_MD_pop_cases` - Total population and cases per Maryland county.
+
+```{r data_processing, echo=TRUE, message=FALSE}
+US_cases <- US_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+		names_to = "date",
+		values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  rename(county = Admin2) %>%
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+  names_to = "date",
+  values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  rename(county = Admin2) %>%
+  select(-c(Lat, Long_))
+
+US_cases_deaths <- US_cases %>%
+  full_join(US_deaths)
+
+US_MD <- US_cases_deaths %>%
+  filter(Province_State == "Maryland") %>%
+  group_by(county, date) %>%  
+  select(county, Province_State, Country_Region, date, cases, deaths) %>%
+  ungroup()
+
+US_MD_deaths <- US_MD %>%
+  filter(deaths > 0) %>% 
+  select(county, date, deaths) %>%
+  group_by(county) %>%
+  summarize(deaths=max(deaths)) %>%
+  ungroup()
+
+US_MD_pop <- US_cases_deaths %>%
+  filter(Province_State == "Maryland") %>%
+  select(county, date, Population) %>%
+  group_by(county) %>%
+  summarize(population=max(Population)) %>%
+  ungroup()
+
+US_MD_cases <- US_cases_deaths %>%
+  filter(Province_State == "Maryland") %>%
+  select(county, date, cases) %>%
+  group_by(county) %>%
+  summarize(cases=max(cases)) %>%
+  ungroup()
+
+US_MD_pop_cases <- US_MD_pop %>%
+  full_join(US_MD_cases)
+```
+
+# Data Summary
+```{r date_summary, echo=TRUE, message=FALSE}
+summary(US_cases)
+summary(US_deaths)
+summary(US_cases_deaths)
+summary(US_MD)
+summary(US_MD_deaths)
+summary(US_MD_pop_cases)
+```
+
+# Maryland COVID Cases Time Series
+```{r covid_MD_time_series, echo=TRUE, message=FALSE}
+US_MD %>%
+  filter(Province_State == "Maryland") %>%
+  filter(cases > 0) %>% 
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(group=county, color=county)) +
+  theme(legend.position="bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("Cases Per County"), y= NULL)
+```
+
+This is a time series plot of the number of cases in Maryland per county.  The apparent increase in cases near January 2022 is a result of the Omicron variant.  Montgomery, Prince George's, Baltimore City, and Baltimore County have the highest case count.
+
+# Maryland COVID Deaths
+```{r covid_MD_bar, echo=TRUE, message=FALSE}
+US_MD_deaths %>%
+  ggplot(aes(x = reorder(county, -deaths), y = deaths, fill=county)) +
+  geom_bar(stat = "identity") +
+  guides(fill="none") +
+  theme(legend.position="bottom", axis.text.x = element_text(angle = 90)) +
+  xlab("County") +
+  labs(title = "Deaths Per County", y= NULL)
+```
+
+The total number of COVID deaths per Maryland county.  Baltimore County, Price George's County, Montgomery County, Baltimore City, and Anne Arundel County lead the chart and are also the largest counties in the state per population.
+
+# Maryland County Cases vs Population
+```{r us_md_pop_cases, echo=TRUE, message=FALSE}
+mod <- lm(cases ~ population, data = US_MD_pop_cases)
+pop_cases_pred <- US_MD_pop_cases %>% mutate(pred = predict(mod))
+
+pop_cases_pred %>% ggplot() +
+  geom_point(aes(x = population, y = cases), color = "blue") +
+  geom_point(aes(x = population, y = pred), color = "red") +
+  xlab("Maryland County Population") +
+  ylab("Maryland County Cases")
+```
+
+A linear model of the cases per county verses the population size of the county.  There is a strong correlation between population size and total number of cases per county.
+
+# Conclusion
+
+The analysis reveals that the counties with the largest populations also have the most number of COVID cases and deaths.  The cases per county time series also shows when new COVID variants can potentially affect the population.
+
+# Bias
+
+There may be outlier bias that skews the model in one direction.  There could also be potential bias in the reporting of cases as some counties could have a less accurate reporting system.  There is no personal bias in this analysis as the data is generalized and not specific to any human trait.
+
+```{r sessioninfo, echo=TRUE}
+sessionInfo()
+```
